@@ -1,0 +1,344 @@
+---
+title: "Detecting deforestation in the Brazilian Amazon"
+subtitle: "Comparing the NDVI to the woodiness index"
+author: "Jannis Fröhlking (439 599)"
+date: "March 23rd, 2021"
+bibliography: references.bib
+output: 
+  html_document:
+    css: style.css
+    toc: true
+    number_sections: true
+    toc_float: true
+---
+
+```{r standardize output, include=FALSE}
+library(knitr)
+opts_chunk$set(message=FALSE, warning=FALSE, echo=FALSE, fig.width = 7, fig.height = 7, fig.align = "center")
+```
+
+# Introduction
+Climate change is one of the world’s most pressing problems [@Cabrera.2008]. If governments continue current policies, researchers predict a 50% chance of exceeding a rise of 3.2 °C by 2100 compared to pre-industrial levels (1850-1900) and a 10% chance of exceeding a rise of 4.4°C by 2100 [@Rogelj.2016]. There are several risks that temperature increases involve ranging from health factors like heat stress to environmental factors. These are risk of crop failures, water shortages, droughts, the risk of river flooding and the sea-level rise concerning coastal cities [@King.2017].
+
+The Amazon rainforest is largely impacted by the climate change. Simulating the raising CO2 levels projects a 70% loss of the Amazon rainforest area by the end of the 21st century [@Cook.2008]. This simulation does not include human and agricultural activity, which will further shrink its size. It is important to note that the dieback of the Amazon rainforest is one of the tipping elements, which describe Earth systems that can be changed to a significantly different state by little disturbances [@Lenton.2008]. In a row with the melting of  the Greenland ice sheet or the El Nino – Southern Oscillation (ENSO) it is one of the most climate sensitive subsystems of the Earth [@Lenton.2008]. 
+
+The Amazon rainforest recycles tons of precipitation and plays a crucial role for the atmospheric moisture supply [@King.2017]. Zeng et al. predicted that deforestation of the Amazon would lead to a 20% - 30% decrease of precipitation [@Zeng.1996]. The loss of moisture would harm every country in South America except Chile (blocked by the Andes) and would yield to an increase of tropical savannahs [@Lovejoy.2019]. Apart from rainfall decrease the biodiversity loss in the Amazon rainforest is a crucial result of deforestation, because about 75% of the world’s terrestrial species live there [@Lenton.2008;@Malhi.2008].
+
+Since 1970 the Brazilian Amazon lost more than 700.000 km² of forest which is 82.7% of its original extent [@Butler.04.01.2020]. Manmade clearance is driven by the need for agricultural land to produce soybean and farming of cattle [@Malhi.2008]. However, the logging, hunting and fire leakage activities are often illegal and need to be monitored to combat deforestation. Near-real-time forest loss detection systems started as the well-known systems DETER and SAD in the early 2000s using coarse resolution MODIS imagery [@Finer.2018]. The advent of medium-resolution Landsat and Sentinel imagery improved the forest loss detections. Research proved that timely identification of deforestation drivers by remotes sensing based monitoring has reduced the deforestation [@Finer.2018].  
+
+Nonetheless, detecting deforestation can be further optimized to give more accurate predictions. The two main approaches to detect forest degradation are first based on the change of canopy cover allowing for clear cut identifications and second the quantification of biomass loss [@Mitchell.2017]. For each approach, many different methods can be used dealing with either multi-resolution optical, synthetic aperture radar (SAR), LiDAR data or EO sensors. One of the most used indices to classify forest images is the „Normalized Difference Vegetation Index“(NDVI)  [@deVries.2013;@Spruce.2011;@HojasGascon.2015]. This report wants to compare classification results based on the NDVI with results based on the simple woodiness index. The woodiness index is a more unknown indices developed by Lehmann et al. (2013) to provide visual indication of within-forest vegetation changes. In its simple version it is the inverted combination of the visible green and the near-infrared band and it is positively correlated with vegetation density[@Lehmann.2013].
+
+# Data
+The analysis is based on surface reflectance products from the Landsat 8 product provided by the United States Geological survey (USGS). The image series covers the temporal range from 19th April 2013 to 07th November 2019 in a 16-day cycle and has a resolution of 30 meters. The images can be downloaded from [sciebo](https://uni-muenster.sciebo.de/s/yvFiuWGqG7riliA/download).
+The research area lies in the northwest of Brazil, in the south of the Amazonas state. It borders on the Brazilian state Rondônia in the south east and on Bolivia in the south.
+
+```{r convert Landsat 8 images to raster cubes and apply indices, include=FALSE}
+set.seed(42) 
+library(gdalcubes)
+library(magrittr)
+gdalcubes_options(threads=8)
+IMAGE_DIR = "C:/AOSTD/data/L8_cropped" # please change to the image folder
+col = create_image_collection(list.files(IMAGE_DIR, recursive = TRUE, pattern=".tif", full.names  = TRUE), format = "L8_SR")
+# only use "clear" pixels
+L8.clear_mask = image_mask("PIXEL_QA", values=c(322, 386, 834, 898, 1346, 324, 388, 836, 900, 1348), invert = TRUE)
+# yearly data cube at 500m spatial resolution
+v = cube_view(srs="EPSG:3857", extent=col, dx=500, dy=500, dt="P1Y", resampling = "average", aggregation = "median")
+
+# create directories
+if(!dir.exists("data/L8_cube_ndvi")){
+  dir.create("data/L8_cube_ndvi")
+  # calculate NDVI and export as GeoTIFF files at subfolder "L8cube"
+  raster_cube(col, v, L8.clear_mask) %>%
+    select_bands(c("B03", "B05")) %>%
+    apply_pixel("(B05-B03)/(B05+B03)") %>%
+    write_tif("data/L8_cube_ndvi",prefix = "NDVI_")
+}
+if(!dir.exists("data/L8_cube_wood")){
+  dir.create("data/L8_cube_wood")
+  # calculate Woodiness and export as GeoTIFF files at subfolder "L8cube"
+  raster_cube(col, v, L8.clear_mask) %>%
+    select_bands(c("B04", "B05")) %>%
+    apply_pixel("-(B05+B04)") %>%
+    write_tif("data/L8_cube_wood",prefix = "Woodiness_")
+}
+if(!dir.exists("data/L8_cube_rgb")){
+  dir.create("data/L8_cube_rgb")
+  # calculate rgb and export as GeoTIFF files at subfolder "L8_cube"
+  raster_cube(col, v, L8.clear_mask) %>%
+    select_bands(c("B02","B03","B04")) %>%
+    write_tif("data/L8_cube_rgb",prefix = "RGB_")
+}
+```
+
+```{r RGB to stars, include=FALSE}
+library(stars)
+subdir = "data/L8_cube_rgb"
+f = paste0(subdir, "/", list.files(subdir, pattern = "RGB_[0-9]*.tif"))
+(st_truecol = read_stars(f))
+```
+
+```{r localisation, out.width="100%"}
+library(mapview)
+mapview(st_bbox(st_truecol), layer.name = "Spatial extent of research area")
+```
+
+# Methods
+The main part of the analysis was done in R [@RCoreTeam.2020]. The code is based on course material for “Analyzing Spatio-Temporal Data” [@Pebesma.2021c;@Pebesma.2021b]. In a first step the images were aggregated to median values of a spatial resolution of 500 meter and a temporal resolution of one year using the *gdalcubes* package [@Appel.2019]. These data cubes convert satellite images to analysis-ready data by hiding complexities and supporting interactivity. 
+Apart from NDVI and woodiness data cubes, true-color composites were built to allow for a visual interpretation of the forest. These data cubes were further processed as spatiotemporal arrays by the *stars* package [@Pebesma.2021]. 
+
+```{r NDVI to stars, include=FALSE}
+# remotes::install_github("r-spatial/stars")
+library(stars)
+subdir = "data/L8_cube_ndvi"
+f = paste0(subdir, "/", list.files(subdir, pattern = "NDVI_[0-9]*\\.tif$"))
+(st_ndvi = read_stars(f))
+```
+
+```{r plot ndvi,  fig.cap="*Figure 1. Aggregated NDVI images*"}
+plot(merge(st_ndvi))
+```
+
+```{r woodiness to stars, include=FALSE}
+library(stars)
+subdir = "data/L8_cube_wood"
+f = paste0(subdir, "/", list.files(subdir, pattern = "Woodiness_[0-9]*\\.tif$"))
+(st_wood = read_stars(f))
+```
+
+```{r plot woodiness, fig.cap= "*Figure 2. Aggregated woodiness images*"}
+plot(merge(st_wood))
+```
+
+```{r ndvi timeseries, include=FALSE}
+x = merge(st_ndvi)
+labels = st_get_dimension_values(x, "attributes")
+years = substr(labels, 6, 9)
+# change attribute dimension to carry times:
+xt_ndvi = st_set_dimensions(x, "attributes", values = years, point = TRUE, names = "time")
+```
+
+```{r woodiness timeseries, include=FALSE}
+x = merge(st_wood)
+labels = st_get_dimension_values(x, "attributes")
+years = substr(labels, 11, 14) 
+# change attribute dimension to carry times:
+xt_wood = st_set_dimensions(x, "attributes", values = years, point = TRUE, names = "time")
+```
+
+
+A major issue by using satellite images are pixels covered by clouds. Due to the aggregation to one-year images many NA values were already removed. However, there are still cloud pixels without values. To tackle that issue the missing values were approximated by interpolating with the temporally nearest available values. 
+
+```{r plot images with many na 1, fig.cap='*Figure 3. Amount of NA values per image*'}
+fraction_na = function(x) mean(is.na(x))
+na_time = st_apply(xt_ndvi, 3, fraction_na)
+plot(na_time[[1]]~years, type = 'l',ylab="% NA values")
+```
+
+In the next step reference data was collected to prepare a supervised classification. Therefore, based on visual interpretation a shapefile including polygons assigned either as forest or non-forest area was created using the geographic information system QGIS [@QGISDevelopmentTeam.2021]. The reference data was collected from the first aggregated image in 2013. The polygons were used to extract the related NDVI/woodiness values. On the training data set with the predictor variable NDVI/woodiness and the outcome variable specifying if it is forest, the two models were built. Here the well-known random forest method was used combined with a Leave-Location-Out spatial cross validation. The target-oriented validation strategy decreases overfitting and improves model performance [@Meyer.2021]. 
+
+Based on the two models the spatio-temporal arrays were classified in forest/non-forest pixels. Identification of deforestation was achieved by comparing two consecutive images. If an image pixel was classified as forest at timestep t-1 and classified as non-forest at timestep t, it is considered deforested.
+
+The two models were compared by using the *Cohen’s Kappa*, which is a statistical measure for categorical variables which takes the agreement occurring by chance into account [@Cohen.1960].
+
+```{r load shapefile, fig.cap='*Figure 4. Reference data*' }
+library(caret)
+sf_2013_4 = st_read("data/traindata/2013-04.shp")
+sf_2013_4 = st_transform(sf_2013_4,st_crs(xt_ndvi))
+
+plot(merge(st_truecol)[,,,,3],rgb=3:1, main="RGB and polygons", reset = FALSE)
+plot(sf_2013_4[2], add = TRUE)
+legend("right", c("forest","no forest"), fill=c("yellow","blue"), inset = 0.05)
+```
+
+# Results
+Many NA values were removed by the temporal interpolation. Because the temporal approximation is not able to predict leading or trailing images, there is a little amount of NA values for these images left. 
+
+```{r approximate NA values ndvi}
+library(xts)
+na_approx = function(x, ...) as.vector(na.approx(zoo(x), ...))
+ndvi_na_app = st_apply(xt_ndvi, 1:2, na_approx, na.rm = FALSE)
+ndvi_na_app = st_set_dimensions(ndvi_na_app, "na_approx", values = years, point = TRUE, names = "time")
+```
+
+```{r plot amount of na values per year, include=FALSE}
+fraction_na = function(x) mean(is.na(x))
+na_time = st_apply(ndvi_na_app, 1, fraction_na)
+plot(na_time[[1]]~years, type = 'l', ylab="% NA values")
+```
+
+```{r plot approximated NA values ndvi, include=FALSE}
+plot(ndvi_na_app)
+```
+
+```{r approximate NA values woodiness, include=FALSE}
+wood_na_app = st_apply(xt_wood, 1:2, na_approx, na.rm = FALSE)
+wood_na_app = st_set_dimensions(wood_na_app, "na_approx", values = years, point = TRUE, names = "time")
+plot(wood_na_app)
+```
+
+```{r seasonal trend of  woodiness, include=FALSE}
+mean_wood = vector("list",length(years))
+for (i in 1:length(years)){
+  mean_wood[i] = mean(wood_na_app[,i,,]$X, na.rm = TRUE)
+}
+plot(years,mean_wood, type="b")
+```
+
+```{r collect train and test data, include=FALSE}
+# Next, we need points, sampled inside these polygons, for which we need to extract the satellite spectral data
+pts = st_sample(sf_2013_4, 1000, "regular") %>%
+    st_as_sf() %>%
+    st_intersection(sf_2013_4)
+train_ndvi = st_extract(ndvi_na_app[,1,,], pts)
+train_ndvi$is_forest = as.factor(pts$is_forest) # no need for join, since the order did not change
+train_ndvi$poly_id = as.factor(pts$id) # no need for join, since the order did not change
+
+train_wood = st_extract(wood_na_app[,1,,], pts)
+train_wood$is_forest = as.factor(pts$is_forest) # no need for join, since the order did not change
+train_wood$poly_id = as.factor(pts$id) # no need for join, since the order did not change
+
+train_ndvi = as.data.frame(train_ndvi)
+train_wood = as.data.frame(train_wood)
+
+train_ndvi$x = NULL # remove geometry
+train_ndvi$time = NULL
+train_wood$x = NULL # remove geometry
+train_wood$time = NULL
+
+boxplot(train_ndvi$X~train_ndvi$is_forest, ylab = "NDVI", xlab = "",names = c("no forest","forest"))
+boxplot(train_wood$X~train_ndvi$is_forest, ylab = "Woodiness", xlab = "",names = c("no forest","forest"))
+```
+
+```{r build model with spatial cross validation}
+library(CAST)
+set.seed(42)
+ind <- CreateSpacetimeFolds(train_ndvi,spacevar="poly_id",k=10)
+ctrl <- trainControl(method="cv",index=ind$index)
+model_ndvi = train(train_ndvi["X"],
+              train_ndvi[,"is_forest"],
+              method = "rf",
+              trControl = ctrl)
+
+ind <- CreateSpacetimeFolds(train_wood,spacevar="poly_id",k=10)
+ctrl <- trainControl(method="cv",index=ind$index)
+model_wood = train(train_wood["X"],
+              train_wood[,"is_forest"],
+              method = "rf",
+              trControl = ctrl)
+
+pr_ndvi = predict(ndvi_na_app, model_ndvi)
+pr_wood = predict(wood_na_app, model_wood)
+```
+
+The model based on the NDVI scores a Kappa of 0.80 which is according to Landis and Koch (1977) an almost perfect agreement. The model based on the woodiness index has a moderate agreement with a Kappa of 0.55 [@Landis.1977].
+
+```{r kappa}
+sprintf("Kappa of NDVI model: %f",model_ndvi$results$Kappa) #0.8
+sprintf("Kappa of Woodiness model: %f",model_wood$results$Kappa) #.55
+```
+
+```{r plot classification ndvi, fig.cap="*Figure 5. Classification based on NDVI*"}
+# all images
+plot(pr_ndvi, col  = c("red","green"), key.pos = NULL)
+legend("bottomright", c("forest","no forest"), fill=c("green","red"))
+```
+
+```{r plot classification woodiness, fig.cap="*Figure 6. Classification based on Woodiness*"}
+plot(pr_wood, col  = c("red","green"), key.pos = NULL)
+legend("bottomright", c("forest","no forest"), fill=c("green","red"))
+```
+
+Identification of classification differences can be done by switch the following layers on and off (here based on the 2019 image):
+
+```{r switch between classifications, out.width="100%"}
+mapview(pr_ndvi[,length(years),,],col.regions= c("red","green"), at=seq(0.5,2.5,1),layer.name = "NDVI classification 2019", legend = FALSE, map.types = "Esri.WorldImagery")+
+  mapview(pr_wood[,length(years),,],col.regions= c("red","green"), at=seq(0.5,2.5,1),layer.name = "Woodiness classification 2019", legend = FALSE)
+```
+
+```{r identify deforestation, include=FALSE}
+library(tidyverse)
+if(!dir.exists("data/deforestation")){
+  dir.create("data/deforestation")
+  dir.create("data/deforestation/ndvi")
+  dir.create("data/deforestation/woodiness")
+}
+subdir = "data/deforestation/ndvi/"
+for (i in 1:length(years)){
+  pr_fn = paste0(subdir,years[i],".tif")
+  if (i > 1){
+      pr_ndvi %>% filter(time==years[i-1]) -> prev
+      pr_ndvi %>% filter(time==years[i]) -> curr
+      my_df = (curr == 0 & prev==1)
+      write_stars(my_df, pr_fn)
+  }
+}
+
+subdir = "data/deforestation/woodiness/"
+for (i in 1:length(years)){
+  pr_fn = paste0(subdir,years[i],".tif")
+  if (i > 1){
+      pr_wood %>% filter(time==years[i-1]) -> prev
+      pr_wood %>% filter(time==years[i]) -> curr
+      my_df = (curr == 0 & prev==1)
+      write_stars(my_df, pr_fn)
+  }
+}
+```
+
+```{r read deforestation st, include=FALSE}
+subdir = "data/deforestation/ndvi"
+f = paste0(subdir, "/", list.files(subdir))
+(defor_ndvi_st = read_stars(f))
+subdir = "data/deforestation/woodiness"
+f = paste0(subdir, "/", list.files(subdir))
+(defor_wood_st = read_stars(f))
+```
+
+The resulting time series predictions show the change from forest to non-forest for each year.
+
+```{r plot deforestation ndvi, fig.cap="*Figure 8. Modelled deforestation based on NDVI*"}
+plot(merge(defor_ndvi_st), col = c("white","red"), key.pos = NULL)
+legend("bottom", c("deforested"), fill=c("red"),inset=-0.33, xpd=TRUE)
+```
+
+```{r plot deforestation wood, fig.cap="*Figure 9. Modelled deforestation based on woodiness*"}
+plot(merge(defor_wood_st), col = c("white","red"), key.pos = NULL)
+legend("bottom", c("deforested"), fill=c("red"),inset=-0.33,xpd=TRUE)
+```
+
+Whereas the visual interpretation of the deforestation images show the clear-cut deforestation, the general decline of biomass can be observed by visualizing the NDVI per year. Here, in 2014 and in 2017 the decline was relatively big.
+
+```{r ndvi trend, fig.cap="*Figure 10. NDVI mean per image*"}
+mean_ndvi = vector("list",length(years))
+for (i in 1:length(years)){
+  mean_ndvi[i] = mean(ndvi_na_app[,i,,]$X, na.rm = TRUE)
+}
+plot(years,mean_ndvi, type="b", ylab="NDVI")
+```
+
+# Discussion/Conclusion
+The interpolation technique is very basic and purely temporal. To perform optimal predictions, one must incorporate the joint spatio-temporal dependence structure [@Wikle.2019]. 
+
+Additionally, the models are based on just one index. Even though the Kappa values showed that it is possible to classify between forest and non-forest, more predictors that incorporate for example the texture would increase the model performance.
+
+Ground truth reference data would amplify the reliability of the model because visual interpretation is more subjective. Nevertheless, the forest and non-forest areas seem to be good separable by looking at the true color composites. 
+
+It is debatable if comparing two images is sufficient to identify deforestation. A better approach could be to take more past images into account and just classify the non-forest pixels of images as deforested that have been forest in each past image. 
+
+Nonetheless the goal of this report was to compare the woodiness index with the NDVI and even if the resulting predictions of deforestation have some limitations, the limitations affect both indices. Ultimately, this report showed that the woodiness index performed inferior to the NDVI index in classifying forest. The NDVI model has an almost perfect agreement indicating its suitability to classify forests. The deforestation based on the NDVI seems to be more plausible, because the patches have a bigger size and are located at accessible areas (e.g. next to the river at the bottom right of the 2014 image). The woodiness index can be added as an additional predictor but should not be the only predictor to build a forest classification model.
+
+# References
+<div id="refs"></div>
+
+# Appendices
+
+## Used software
+All plots were created, and computations were done using QGIS 3.10.4 [@QGISDevelopmentTeam.2021] and R 4.0.3 [@RCoreTeam.2020] with the following packages:
+
+*   *caret* 6.0-86 [@Kuhn.2020]
+*   *CAST* 0.5.0 [@Meyer.2021]
+*   *gdalcubes* 0.3.1 [@Appel.2019]
+*   *magrittr* 2.0.1 [@Bache.2020]
+*   *mapview* 2.9.4 [@Appelhans.2020]
+*   *stars* 0.5-2 [@Pebesma.2021]
+*   *xts* 0.12.1 [@JeffreyA.Ryan.2020]
